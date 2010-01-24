@@ -401,6 +401,10 @@
     clist * fetch_result;
 
     [self connect];
+	if (! _connected) {
+		return 0;
+	}
+
     set = mailimap_set_new_interval(start, end);
     if (set == NULL) {
         return nil;
