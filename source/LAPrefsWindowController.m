@@ -8,6 +8,7 @@
 
 #import "LAPrefsWindowController.h"
 #import "LAAppDelegate.h"
+#import "LAAccountImportController.h"
 #import <LetterBox/LetterBox.h>
 
 @interface LAPrefsWindowController ()
@@ -19,13 +20,15 @@
 @implementation LAPrefsWindowController
 
 - (void)awakeFromNib {
-	
+    
     if ([[appDelegate accounts] count]) {
         [self loadAccountSettings:[[appDelegate accounts] lastObject]];
     }
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(accountUpdated:) name:@"AccountUpdated" object:nil];
 }
 
-- (void) loadAccountSettings:(LBAccount*)account {
+- (void)loadAccountSettings:(LBAccount*)account {
     
     assert(account);
     
@@ -44,7 +47,7 @@
     
 }
 
-- (void) saveAccountSettings:(id)sender {
+- (void)saveAccountSettings:(id)sender {
     
     LBAccount *account = [[appDelegate accounts] lastObject];
     
@@ -71,5 +74,19 @@
     
 }
 
+- (IBAction)importMailAccount:(id)sender {
+    LAAccountImportController* importController = [[LAAccountImportController alloc] initWithWindowNibName:@"AccountImport"];
+    [[importController window] center];
+    [[importController window] makeKeyAndOrderFront:self];
+}
+
+- (void)accountUpdated:(NSNotification*)note {
+    [self loadAccountSettings:[[appDelegate accounts] lastObject]];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [super dealloc];
+}
 
 @end

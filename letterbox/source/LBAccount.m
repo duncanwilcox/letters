@@ -30,22 +30,24 @@
  */
 
 #import "LBAccount.h"
+#import "LBServer.h"
 
 @implementation LBAccount
 
-@synthesize username=_username;
-@synthesize password=_password;
-@synthesize imapServer=_imapServer;
-@synthesize fromAddress=_fromAddress;
-@synthesize authType=_authType;
-@synthesize imapPort=_imapPort;
-@synthesize connectionType=_connectionType;
-@synthesize smtpServer=_smtpServer;
+@synthesize username;
+@synthesize password;
+@synthesize imapServer;
+@synthesize fromAddress;
+@synthesize authType;
+@synthesize imapPort;
+@synthesize connectionType;
+@synthesize smtpServer;
+@synthesize isActive;
 
 - (id) init {
 	self = [super init];
 	if (self != nil) {
-		_imapPort = 993;
+		imapPort = 993;
 	}
 	return self;
 }
@@ -54,13 +56,25 @@
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     
-    [_username release];
-    [_password release];
-    [_imapServer release];
-    [_smtpServer release];
-    [_fromAddress release];
+    [username release];
+    [password release];
+    [imapServer release];
+    [smtpServer release];
+    [fromAddress release];
     
     [super dealloc];
+}
+
+- (LBServer*) server {
+    
+    if (!server) {
+        
+        NSString *cacheFolder = [@"~/Library/Letters/" stringByExpandingTildeInPath];
+        
+        server = [[LBServer alloc] initWithAccount:self usingCacheFolder:[NSURL fileURLWithPath:cacheFolder isDirectory:YES]];
+    }
+    
+    return server;
 }
 
 
@@ -92,6 +106,10 @@
         acct.imapPort = [[d objectForKey:@"imapPort"] intValue];
     }
     
+    if ([d objectForKey:@"isActive"]) {
+        acct.isActive = [[d objectForKey:@"isActive"] boolValue];
+    }
+    
     if ([d objectForKey:@"connectionType"]) {
         acct.connectionType = [[d objectForKey:@"connectionType"] intValue];
     }
@@ -107,24 +125,25 @@
 
     NSMutableDictionary *d = [NSMutableDictionary dictionary];
     
-    [d setObject:_username ? _username : @"" forKey:@"username"];
-    [d setObject:_password ? _password : @"" forKey:@"password"];
+    [d setObject:username ? username : @"" forKey:@"username"];
+    [d setObject:password ? password : @"" forKey:@"password"];
     
-    [d setObject:_fromAddress ? _fromAddress : @"" forKey:@"fromAddress"];
+    [d setObject:fromAddress ? fromAddress : @"" forKey:@"fromAddress"];
     
-    [d setObject:_imapServer ? _imapServer : @"" forKey:@"imapServer"];
-    [d setObject:_smtpServer ? _smtpServer : @"" forKey:@"smtpServer"];
+    [d setObject:imapServer ? imapServer : @"" forKey:@"imapServer"];
+    [d setObject:smtpServer ? smtpServer : @"" forKey:@"smtpServer"];
     
-    [d setObject:[NSNumber numberWithInt:_authType] forKey:@"authType"];
-    [d setObject:[NSNumber numberWithInt:_imapPort] forKey:@"imapPort"];
+    [d setObject:[NSNumber numberWithInt:authType] forKey:@"authType"];
+    [d setObject:[NSNumber numberWithInt:imapPort] forKey:@"imapPort"];
+    [d setObject:[NSNumber numberWithInt:isActive] forKey:@"isActive"];
     
-    [d setObject:[NSNumber numberWithInt:_connectionType] forKey:@"connectionType"];
+    [d setObject:[NSNumber numberWithInt:connectionType] forKey:@"connectionType"];
     
     return d;
 }
 
 - (NSString*) description {
-    return [NSString stringWithFormat:@"%@ (%@@%@)", [super description], _username, _imapServer];
+    return [NSString stringWithFormat:@"%@ (%@@%@)", [super description], username, imapServer];
 }
 
 @end

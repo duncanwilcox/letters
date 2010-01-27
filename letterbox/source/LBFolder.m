@@ -32,43 +32,128 @@
 #import "LBFolder.h"
 #import <libetpan/libetpan.h>
 #import "LBMessage.h"
-#import "LBServer.h"
 #import "LetterBoxTypes.h"
 #import "LBBareMessage.h"
+#import "LBIMAPConnection.h"
 
-@interface LBFolder (Private)
-@end
+
+/* From Libetpan source */
+
+int imap_flags_to_flags(struct mailimap_msg_att_dynamic * att_dyn, struct mail_flags ** result);
+
+//TODO Can these things be made public in libetpan?
+int uid_list_to_env_list(clist * fetch_result, struct mailmessage_list ** result,  mailsession * session, mailmessage_driver * driver) {
+    
+    clistiter * cur;
+    struct mailmessage_list * env_list;
+    int r;
+    int res;
+    carray * tab;
+    unsigned int i;
+    mailmessage * msg;
+    
+    tab = carray_new(128);
+    if (tab == NULL) {
+        res = MAIL_ERROR_MEMORY;
+        goto err;
+    }
+    
+    for(cur = clist_begin(fetch_result); cur != NULL; cur = clist_next(cur)) {
+        struct mailimap_msg_att * msg_att;
+        clistiter * item_cur;
+        uint32_t uid;
+        size_t size;
+        
+        msg_att = clist_content(cur);
+        uid = 0;
+        size = 0;
+        for(item_cur = clist_begin(msg_att->att_list); item_cur != NULL; item_cur = clist_next(item_cur)) {
+            struct mailimap_msg_att_item * item;
+            
+            item = clist_content(item_cur);
+            switch (item->att_type) {
+                case MAILIMAP_MSG_ATT_ITEM_STATIC:
+                    switch (item->att_data.att_static->att_type) {
+                        case MAILIMAP_MSG_ATT_UID:
+                            uid = item->att_data.att_static->att_data.att_uid;
+                            break;
+                            
+                        case MAILIMAP_MSG_ATT_RFC822_SIZE:
+                            size = item->att_data.att_static->att_data.att_rfc822_size;
+                            break;
+                    }
+                    break;
+            }
+        }
+        
+        msg = mailmessage_new();
+        if (msg == NULL) {
+            res = MAIL_ERROR_MEMORY;
+            goto free_list;
+        }
+        
+        r = mailmessage_init(msg, session, driver, uid, size);
+        if (r != MAIL_NO_ERROR) {
+            res = r;
+            goto free_msg;
+        }
+        
+        r = carray_add(tab, msg, NULL);
+        if (r < 0) {
+            res = MAIL_ERROR_MEMORY;
+            goto free_msg;
+        }
+    }
+    
+    env_list = mailmessage_list_new(tab);
+    if (env_list == NULL) {
+        res = MAIL_ERROR_MEMORY;
+        goto free_list;
+    }
+    
+    * result = env_list;
+    
+    return MAIL_NO_ERROR;
+    
+free_msg:
+    mailmessage_free(msg);
+free_list:
+    for(i = 0 ; i < carray_count(tab) ; i++)
+        mailmessage_free(carray_get(tab, i));
+err:
+    return res;
+}
+
+
     
 @implementation LBFolder
-- (id)initWithPath:(NSString *)path inServer:(LBServer *)server {
-    struct mailstorage *storage = (struct mailstorage *)[server storageStruct];
+- (id)initWithPath:(NSString *)apath inIMAPConnection:(LBIMAPConnection *)aConnection {
+    struct mailstorage *storage = (struct mailstorage *)[aConnection storageStruct];
     self = [super init];
-    if (self)
-    {
-        _path = [path retain];
-        _connected = NO;
-        _server = [server retain];
-        _folder = mailfolder_new(storage, (char *)[_path cStringUsingEncoding:NSUTF8StringEncoding], NULL); 
-        assert(_folder != NULL);
+    if (self) {
+        path = [apath retain];
+        connection = [aConnection retain];
+        folder = mailfolder_new(storage, (char *)[path cStringUsingEncoding:NSUTF8StringEncoding], NULL); 
+        assert(folder != NULL);
     }
     return self;
 }
 
 
 - (void)dealloc {   
-    if (_connected) {
+    if (connected) {
         [self disconnect];
     }
-    mailfolder_free(_folder);
-    [_server release];
-    [_path release];
+    mailfolder_free(folder);
+    [connection release];
+    [path release];
     [super dealloc];
 }
 
 
 - (void)connect {
     int err = MAIL_NO_ERROR;
-    err = mailfolder_connect(_folder);
+    err = mailfolder_connect(folder);
     
     // FIXME: should we err if we're already connected?
     // FIXME: maybe return a boolean?
@@ -80,13 +165,16 @@
     }
     
     //IfTrue_RaiseException(err != MAILIMAP_NO_ERROR, LBUnknownError,  [NSString stringWithFormat:@"Error number: %d",err]);   
-    _connected = YES;
+    connected = YES;
 }
 
+- (BOOL) connected {
+    return connected;
+}
 
 - (void)disconnect {
-    if(_connected) {
-        mailfolder_disconnect(_folder);
+    if(connected) {
+        mailfolder_disconnect(folder);
     }
         
 }
@@ -94,24 +182,24 @@
 
 - (NSString *)name {
     //Get the last part of the path
-    NSArray *pathParts = [_path componentsSeparatedByString:@"."];
+    NSArray *pathParts = [path componentsSeparatedByString:@"."];
     return [pathParts objectAtIndex:[pathParts count]-1];
 }
 
 // FIXME: make this a property.
 - (NSString *)path {
-    return _path;
+    return path;
 }
 
 
-- (void)setPath:(NSString *)path {
+- (void)setPath:(NSString *)aPath {
     int err;
-    const char *newPath = [path cStringUsingEncoding:NSUTF8StringEncoding];
-    const char *oldPath = [_path cStringUsingEncoding:NSUTF8StringEncoding];
+    const char *newPath = [aPath cStringUsingEncoding:NSUTF8StringEncoding];
+    const char *oldPath = [path cStringUsingEncoding:NSUTF8StringEncoding];
     
     [self connect]; 
     [self unsubscribe];
-    err = mailimap_rename([_server session], oldPath, newPath);
+    err = mailimap_rename([connection session], oldPath, newPath);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -120,18 +208,18 @@
     }
     
     //IfTrue_RaiseException(err != MAILIMAP_NO_ERROR, LBUnknownError,  [NSString stringWithFormat:@"Error number: %d",err]);   
-    [path retain];
-    [_path release];
-    _path = path;
+    [aPath retain];
+    [path release];
+    path = aPath;
     [self subscribe];
 }
 
 
 - (void)create {
     int err;
-    const char *path = [_path cStringUsingEncoding:NSUTF8StringEncoding];
     
-    err = mailimap_create([_server session], path);
+    
+    err = mailimap_create([connection session], [path cStringUsingEncoding:NSUTF8StringEncoding]);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -147,11 +235,9 @@
 
 - (void)delete {
     
-    const char *path = [_path cStringUsingEncoding:NSUTF8StringEncoding];
-    
     [self connect];
     [self unsubscribe];
-    int err = mailimap_delete([_server session], path);
+    int err = mailimap_delete([connection session], [path cStringUsingEncoding:NSUTF8StringEncoding]);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -165,10 +251,8 @@
 
 - (void)subscribe {
     
-    const char *path = [_path cStringUsingEncoding:NSUTF8StringEncoding];
-    
     [self connect];
-    int err = mailimap_subscribe([_server session], path);
+    int err = mailimap_subscribe([connection session], [path cStringUsingEncoding:NSUTF8StringEncoding]);
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
         NSLog(@"%@", [NSString stringWithFormat:@"Error number: %d",err]);
@@ -181,10 +265,8 @@
 
 - (void)unsubscribe {
     
-    const char *path = [_path cStringUsingEncoding:NSUTF8StringEncoding];
-    
     [self connect];
-    int err = mailimap_unsubscribe([_server session], path);
+    int err = mailimap_unsubscribe([connection session], [path cStringUsingEncoding:NSUTF8StringEncoding]);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -197,7 +279,7 @@
 
 
 - (struct mailfolder *)folderStruct {
-    return _folder;
+    return folder;
 }
 
 
@@ -221,7 +303,7 @@
 
 - (void)check {
     [self connect];
-    int err = mailfolder_check(_folder);
+    int err = mailfolder_check(folder);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -401,10 +483,12 @@
     clist * fetch_result;
 
     [self connect];
-	if (! _connected) {
-		return 0;
-	}
-
+    
+    if (!connected) {
+        debug(@"Could not connect for folder %@", path);
+        return nil;
+    }
+    
     set = mailimap_set_new_interval(start, end);
     if (set == NULL) {
         return nil;
@@ -439,15 +523,6 @@
         NSLog(@"Error %d", [NSString stringWithFormat:@"Error number: %d",r]);
         // FIXME: return NSError* ?
         return nil;
-        
-        /*
-        #warning nooooooooooo more exceptions! booo
-        NSException *exception = [NSException
-                    exceptionWithName:LBUnknownError
-                    reason:[NSString stringWithFormat:@"Error number: %d",r]
-                    userInfo:nil];
-        [exception raise];
-        */
     }
 
     mailimap_fetch_type_free(fetch_type);
@@ -461,7 +536,7 @@
 
     env_list = NULL;
     r = uid_list_to_env_list(fetch_result, &env_list, [self folderSession], imap_message_driver);
-    r = mailfolder_get_envelopes_list(_folder, env_list);
+    r = mailfolder_get_envelopes_list(folder, env_list);
     if (r != MAIL_NO_ERROR) {
         if ( env_list != NULL ) {
             mailmessage_list_free(env_list);
@@ -504,9 +579,6 @@
         free(env_list);
     }
     mailimap_fetch_list_free(fetch_result);
-    
-    // turned off for now.
-    // [_server saveMessagesToCache:messages forFolder:_path];
     
     return messages;
 }
@@ -616,7 +688,7 @@
 - (void)expunge {
     
     [self connect];
-    int err = mailfolder_expunge(_folder);
+    int err = mailfolder_expunge(folder);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -627,12 +699,11 @@
     //IfTrue_RaiseException(err != MAILIMAP_NO_ERROR, LBUnknownError, [NSString stringWithFormat:@"Error number: %d",err]);   
 }
 
-- (void)copyMessageWithUID:(NSString *)uid toFolderWithPath:(NSString *)path {
+- (void)copyMessageWithUID:(NSString *)uid toFolderWithPath:(NSString *)toFolderPath {
     [self connect];
 
-    const char *mbPath = [path cStringUsingEncoding:NSUTF8StringEncoding];
     NSUInteger uidnum = (unsigned int)[[[uid componentsSeparatedByString:@"-"] objectAtIndex:1] doubleValue];
-    int err = mailsession_copy_message([self folderSession], uidnum, mbPath);
+    int err = mailsession_copy_message([self folderSession], uidnum, [toFolderPath cStringUsingEncoding:NSUTF8StringEncoding]);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -649,7 +720,7 @@
     unsigned int junk;
     
     [self connect];
-    int err = mailfolder_status(_folder, &junk, &junk, &unseenCount);
+    int err = mailfolder_status(folder, &junk, &junk, &unseenCount);
     
     if (err != MAILSMTP_NO_ERROR) {
         NSLog(@"%s:%d", __FUNCTION__, __LINE__);
@@ -669,7 +740,7 @@
 
 
 - (mailsession *)folderSession; {
-    return _folder->fld_session;
+    return folder->fld_session;
 }
 
 
@@ -688,87 +759,4 @@
     return data->imap_session;  
 }
 
-/* From Libetpan source */
-//TODO Can these things be made public in libetpan?
-int uid_list_to_env_list(clist * fetch_result, struct mailmessage_list ** result,  mailsession * session, mailmessage_driver * driver) {
-    
-    clistiter * cur;
-    struct mailmessage_list * env_list;
-    int r;
-    int res;
-    carray * tab;
-    unsigned int i;
-    mailmessage * msg;
-
-    tab = carray_new(128);
-    if (tab == NULL) {
-        res = MAIL_ERROR_MEMORY;
-        goto err;
-    }
-
-    for(cur = clist_begin(fetch_result); cur != NULL; cur = clist_next(cur)) {
-        struct mailimap_msg_att * msg_att;
-        clistiter * item_cur;
-        uint32_t uid;
-        size_t size;
-
-        msg_att = clist_content(cur);
-        uid = 0;
-        size = 0;
-        for(item_cur = clist_begin(msg_att->att_list); item_cur != NULL; item_cur = clist_next(item_cur)) {
-            struct mailimap_msg_att_item * item;
-
-            item = clist_content(item_cur);
-            switch (item->att_type) {
-                case MAILIMAP_MSG_ATT_ITEM_STATIC:
-                switch (item->att_data.att_static->att_type) {
-                    case MAILIMAP_MSG_ATT_UID:
-                        uid = item->att_data.att_static->att_data.att_uid;
-                    break;
-
-                    case MAILIMAP_MSG_ATT_RFC822_SIZE:
-                        size = item->att_data.att_static->att_data.att_rfc822_size;
-                    break;
-                }
-                break;
-            }
-        }
-
-        msg = mailmessage_new();
-        if (msg == NULL) {
-            res = MAIL_ERROR_MEMORY;
-            goto free_list;
-        }
-
-        r = mailmessage_init(msg, session, driver, uid, size);
-        if (r != MAIL_NO_ERROR) {
-            res = r;
-            goto free_msg;
-        }
-
-        r = carray_add(tab, msg, NULL);
-        if (r < 0) {
-            res = MAIL_ERROR_MEMORY;
-            goto free_msg;
-        }
-    }
-
-    env_list = mailmessage_list_new(tab);
-    if (env_list == NULL) {
-        res = MAIL_ERROR_MEMORY;
-        goto free_list;
-    }
-
-    * result = env_list;
-
-    return MAIL_NO_ERROR;
-
-    free_msg:
-        mailmessage_free(msg);
-    free_list:
-        for(i = 0 ; i < carray_count(tab) ; i++)
-        mailmessage_free(carray_get(tab, i));
-    err:
-        return res;
-}
 @end
